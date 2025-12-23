@@ -70,3 +70,8 @@ main-minimal.js
 # Old test files (deprecated)
 /test/unit/path-traversal.test.js
 /test/unit/temp-test-files
+
+# Tauri
+/src-tauri/target/
+/src-tauri/Cargo.lock
+/src-tauri/WixTools/

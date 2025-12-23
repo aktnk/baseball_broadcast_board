@@ -58,9 +58,22 @@ const app = Vue.createApp({
     // 監視するデータをまとめて指定
     boardData: {
       handler() {
+        // Don't send updates if data was just restored from server (prevent infinite loop)
+        if (this.restoredFromServer) {
+          this.restoredFromServer = false;
+          return;
+        }
         this.updateBoard();
       },
       deep: true, // ネストされたオブジェクトも監視
+    },
+    // Debug: Watch connectionStatus changes
+    connectionStatus(newVal, oldVal) {
+      console.log(`[Vue Watch] connectionStatus changed: ${oldVal} -> ${newVal}`);
+    },
+    // Debug: Watch clientRole changes
+    clientRole(newVal, oldVal) {
+      console.log(`[Vue Watch] clientRole changed: ${oldVal} -> ${newVal}`);
     },
   },
   computed: {
@@ -85,11 +98,15 @@ const app = Vue.createApp({
     },
     // UI should be disabled if role is slave
     isOperationDisabled() {
-      return this.clientRole === 'slave';
+      const result = this.clientRole === 'slave';
+      console.log(`[Vue Computed] isOperationDisabled: ${result} (clientRole: ${this.clientRole})`);
+      return result;
     },
     // Show master indicator
     isMaster() {
-      return this.clientRole === 'master';
+      const result = this.clientRole === 'master';
+      console.log(`[Vue Computed] isMaster: ${result} (clientRole: ${this.clientRole})`);
+      return result;
     },
   },
   methods: {
@@ -132,7 +149,7 @@ const app = Vue.createApp({
       const wsHost = isElectron ? 'localhost:8080' : window.location.host;
 
       try {
-        this.socket = new WebSocket(`${wsProtocol}//${wsHost}`);
+        this.socket = new WebSocket(`${wsProtocol}//${wsHost}/ws`);
 
         this.socket.onopen = () => this.handleWebSocketOpen();
         this.socket.onmessage = (event) => this.handleWebSocketMessage(event);
@@ -146,71 +163,87 @@ const app = Vue.createApp({
 
     handleWebSocketOpen() {
       console.log("WebSocket connection established for control panel.");
+      console.log("  connectionStatus before:", this.connectionStatus);
       this.connectionStatus = 'connected';
+      console.log("  connectionStatus after:", this.connectionStatus);
       this.reconnectAttempts = 0;
 
       // Get stored master token from sessionStorage
       const storedToken = sessionStorage.getItem('masterToken');
+      console.log("  Stored master token:", storedToken ? "exists" : "none");
 
       // Send handshake to identify as operation client
       const handshakeMessage = {
         type: 'handshake',
-        client_type: 'operation'
+        clientType: 'operation'
       };
 
       // Include token if available
       if (storedToken) {
         handshakeMessage.masterToken = storedToken;
-        console.log('Sending handshake with stored master token');
+        console.log('  Sending handshake with stored master token');
+      } else {
+        console.log('  Sending handshake without master token');
       }
 
+      console.log("  Sending handshake:", JSON.stringify(handshakeMessage));
       this.socket.send(JSON.stringify(handshakeMessage));
     },
 
     handleWebSocketMessage(event) {
+      console.log("Received WebSocket message:", event.data);
       try {
         const message = JSON.parse(event.data);
+        console.log("  Parsed message type:", message.type);
+        console.log("  Full message:", message);
 
         // Handle role assignment
         if (message.type === 'role_assignment') {
+          console.log("  Processing role_assignment");
           this.clientRole = message.role;
           this.clientId = message.clientId;
           this.masterClientId = message.masterClientId;
+          console.log(`    clientRole: ${this.clientRole}`);
+          console.log(`    clientId: ${this.clientId}`);
+          console.log(`    masterClientId: ${this.masterClientId}`);
 
           // Store master token if provided
           if (message.role === 'master' && message.masterToken) {
             sessionStorage.setItem('masterToken', message.masterToken);
-            console.log('Master token saved to sessionStorage');
+            console.log('    Master token saved to sessionStorage');
           }
 
-          console.log(`Assigned role: ${message.role}`);
+          console.log(`  Assigned role: ${message.role}`);
           return;
         }
 
         // Handle role change
         if (message.type === 'role_changed') {
+          console.log("  Processing role_changed");
           this.clientRole = message.newRole;
+          console.log(`    newRole: ${message.newRole}`);
 
           // Save new master token if provided
           if (message.newRole === 'master' && message.masterToken) {
             sessionStorage.setItem('masterToken', message.masterToken);
-            console.log('Master token saved to sessionStorage');
+            console.log('    Master token saved to sessionStorage');
           }
 
           // Clear token if instructed
           if (message.clearToken) {
             sessionStorage.removeItem('masterToken');
-            console.log('Master token removed from sessionStorage');
+            console.log('    Master token removed from sessionStorage');
           }
 
-          console.log(`Role changed to: ${message.newRole} (reason: ${message.reason})`);
+          console.log(`  Role changed to: ${message.newRole} (reason: ${message.reason})`);
           return;
         }
 
         // Handle game state update
         if (message.type === 'game_state' || !message.type) {
-          const savedState = message.data || message;
-          console.log("Received game state from server");
+          const savedState = message.boardData || message.data || message;
+          console.log("  Processing game_state");
+          console.log("    Received game state from server:", savedState);
 
           // Restore game state (but not UI configuration like game_array and team_items)
           this.game_title = savedState.game_title || this.game_title;
@@ -229,21 +262,29 @@ const app = Vue.createApp({
           this.score_bottom = savedState.score_bottom || 0;
 
           this.restoredFromServer = true;
+          console.log("    Game state restored");
         }
       } catch (error) {
-        console.error("Error parsing message:", error);
+        console.error("Error parsing message:", error, "Raw data:", event.data);
       }
     },
 
     handleWebSocketError(error) {
       console.error("WebSocket error:", error);
+      console.error("  Error details:", {
+        type: error.type,
+        target: error.target,
+        currentTarget: error.currentTarget
+      });
     },
 
     handleWebSocketClose() {
       console.log("WebSocket connection closed");
+      console.log("  connectionStatus before:", this.connectionStatus);
 
       if (this.connectionStatus !== 'disconnected') {
         this.connectionStatus = 'reconnecting';
+        console.log("  connectionStatus after:", this.connectionStatus);
         this.scheduleReconnect();
       }
     },
@@ -285,7 +326,7 @@ const app = Vue.createApp({
       if (this.socket && this.socket.readyState === WebSocket.OPEN && this.clientRole === 'master') {
         this.socket.send(JSON.stringify({
           type: 'game_state_update',
-          data: this.boardData
+          boardData: this.boardData
         }));
       }
     },

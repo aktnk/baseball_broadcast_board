@@ -151,7 +151,7 @@ const board = Vue.createApp({
       const wsHost = window.location.host;
 
       try {
-        this.socket = new WebSocket(`${wsProtocol}//${wsHost}`);
+        this.socket = new WebSocket(`${wsProtocol}//${wsHost}/ws`);
 
         this.socket.onopen = () => this.handleWebSocketOpen();
         this.socket.onmessage = (event) => this.handleWebSocketMessage(event);
@@ -171,19 +171,44 @@ const board = Vue.createApp({
       // Send handshake to identify as board client
       this.socket.send(JSON.stringify({
         type: 'handshake',
-        client_type: 'board'
+        clientType: 'board'
       }));
     },
 
     handleWebSocketMessage(event) {
       try {
+        console.log('Board received WebSocket message:', event.data);
         const message = JSON.parse(event.data);
+        console.log('  Parsed message:', message);
+        console.log('  Message type:', message.type);
 
         // Handle game state update
         if (message.type === 'game_state' || !message.type) {
-          this.boardData = message.data || message;
+          const newData = message.boardData || message.data || message;
+          console.log('  Updating board with data:', newData);
+
+          // Update individual properties to maintain reactivity
+          if (newData) {
+            // Use 'in' operator to check if property exists (handles false, 0, empty string correctly)
+            if ('game_title' in newData) this.boardData.game_title = newData.game_title;
+            if ('team_top' in newData) this.boardData.team_top = newData.team_top;
+            if ('team_bottom' in newData) this.boardData.team_bottom = newData.team_bottom;
+            if ('game_inning' in newData) this.boardData.game_inning = newData.game_inning;
+            if ('last_inning' in newData) this.boardData.last_inning = newData.last_inning;
+            if ('top' in newData) this.boardData.top = newData.top;
+            if ('first_base' in newData) this.boardData.first_base = newData.first_base;
+            if ('second_base' in newData) this.boardData.second_base = newData.second_base;
+            if ('third_base' in newData) this.boardData.third_base = newData.third_base;
+            if ('ball_cnt' in newData) this.boardData.ball_cnt = newData.ball_cnt;
+            if ('strike_cnt' in newData) this.boardData.strike_cnt = newData.strike_cnt;
+            if ('out_cnt' in newData) this.boardData.out_cnt = newData.out_cnt;
+            if ('score_top' in newData) this.boardData.score_top = newData.score_top;
+            if ('score_bottom' in newData) this.boardData.score_bottom = newData.score_bottom;
+            console.log('  Board updated. New boardData:', this.boardData);
+          }
+        } else {
+          console.log('  Ignoring message type:', message.type);
         }
-        // Ignore other message types (role_assignment, etc.)
       } catch (error) {
         console.error('Error parsing board data:', error);
       }
